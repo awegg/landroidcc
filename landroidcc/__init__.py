@@ -28,23 +28,27 @@ class Landroid(object):
     _api_products = None
     _mower_product = None  # holds the current mower from _api_products
     _api_certificate = None
-    _status = None  # type: MowerStatus
+    _status = None  # type: LandroidStatus
     _mqtt_client = None
     _cachedir = None
     _cache = {}
 
     def __init__(self):
+        """
+        Class to communicate with the Landroid cloud using REST for user information and MQTT for getting status
+        updates and send them to the mower
+        """
         self._statuscallback = None
         self._eventmessage = Event()
         self._eventconnect = Event()
 
     def connect(self, username, password):
         """
-        Connect to the Cloud REST API. Does not connect to the robot but provides the needed configuration parameters.
+        Connect to the cloud with the given credentials.
 
         :param username: Username for the cloud login
         :param password: Password for the login
-        :return:
+        :return: None
         """
         self._username = username
         self._cachedir = os.path.join(tempfile.gettempdir(), "landroidcc", self._username)
@@ -70,18 +74,37 @@ class Landroid(object):
         self._connectmqtt()
 
     def disconnect(self):
+        """
+        Disconnects from the cloud
+
+        :return: None
+        """
         self._mqtt_client.disconnect()
 
-    def start_mowing(self):
-        # if self._status.lastState
+    def start(self):
+        """
+        Sent the mower the command to start mowing
+
+        :return: None
+        """
         self._send_command('{"cmd": 1}')
         log.info("Command sent: Start Mowing")
 
-    def stop_mowing(self):
+    def pause(self):
+        """
+        Sent the mower the command to pause mowing
+
+        :return: None
+        """
         self._send_command('{"cmd": 2}')
-        log.info("Command sent: Stop Mowing")
+        log.info("Command sent: Pause Mowing")
 
     def go_home(self):
+        """
+        Sent the mower the command to go home mowing
+
+        :return: None
+        """
         self._send_command('{"cmd": 3}')
         log.info("Command sent: Go Home")
 
@@ -99,8 +122,7 @@ class Landroid(object):
         # The callback for when a PUBLISH message is received from the server.
         def on_message(client, userdata, msg):
             log.debug("MQTT Msg Received: " + msg.topic + " " + str(msg.payload))
-            status = MowerStatus()
-            status.updatestatus(msg.payload)
+            status = LandroidStatus(msg.payload)
             self._status = status
             self._eventmessage.set()
             if self._statuscallback:
@@ -131,9 +153,34 @@ class Landroid(object):
         return self._status
 
     def set_statuscallback(self, func):
+        """
+        Sets a callback function which will be called for any status update from the mower::
+
+          def callback(status):
+            # type: (LandroidStatus) -> None
+            print (status)
+
+          landroid = Landroid()
+          landroid.connect("", "")
+          landroid.set_statuscallback(callback)
+
+        :param func: The callback
+        :return: None
+        """
         self._statuscallback = func
 
     def get_status(self, refresh=True):
+        """
+        Returns the last retrieved status from the mower. If refresh is True an update is
+        requested from the mower and the call will block until an update is received.
+
+        Once connected the status will automatically updated once the mower sent an automatic
+        update message. This happens every 2-15 minutes and for all state changes.
+
+        :param refresh: Force an update or only return the cached last status
+        :rtype: LandroidStatus
+        :return: The status of the mower.
+        """
         if refresh:
             self._apicall_mqtt("{}")
         return self._status
@@ -212,10 +259,10 @@ class Landroid(object):
                                          code=self._mower_product["code"])
 
 
-class MowerStatus(object):
-    _BatteryStatus = namedtuple("BatteryStatus", "percent,charges,volts,temperature,charging")
-    _Orientation = namedtuple("Orientation", "heading,pitch,roll")
-    _Statistics = namedtuple("Statistics", "distance,running,mowing")
+class LandroidStatus(object):
+    BatteryStatus = namedtuple("BatteryStatus", "percent,charges,volts,temperature,charging")
+    Orientation = namedtuple("Orientation", "heading,pitch,roll")
+    Statistics = namedtuple("Statistics", "distance,running,mowing")
     _lastStateDict = {
         0: "Idle",
         1: "Home",
@@ -255,39 +302,82 @@ class MowerStatus(object):
 
     }
 
-    battery = None
-    orientation = None
-    statistics = None
+    def __init__(self, inputraw):
+        self._battery = None
+        self._orientation = None
+        self._statistics = None
 
-    lastError = None
-    lastState = None
-    updated = None
-    raw = None
+        self._error = None
+        self._state = None
+        self._updated = None
+        self._raw = inputraw  # Raw string as received from the mower
+        self._updatestatus(inputraw)
 
-    def __init__(self):
-        pass
+    def get_battery(self):
+        """
 
-    def updatestatus(self, inputraw):
-        self.raw = inputraw
+        :return:
+        :rtype: BatteryStatus
+        """
+        return self._battery
+
+    def get_orientation(self):
+        return self._orientation
+
+    def get_statistics(self):
+        return self._statistics
+
+    def get_updated(self):
+        return self._updated
+
+    def get_error(self):
+        """
+        Returns the error as string. If there is no error, "No Error" is returned
+
+        :return: The error as text
+        :rtype: str
+        """
+        return self._state
+
+    def get_state(self):
+        """
+        Returns the state as string
+
+        :return: The state as text
+        :rtype: str
+        """
+        return self._state
+
+    def get_raw(self):
+        """
+        Returns the status update as received directly from MQTT/mower.
+
+        :return: Raw status message
+        :rtype: dict
+        """
+        return self._raw
+
+    def _updatestatus(self, inputraw):
+        self._raw = inputraw
         api_response = json.loads(inputraw)
 
-        self.battery = self._BatteryStatus(api_response["dat"]["bt"]["p"],
-                                           api_response["dat"]["bt"]["nr"],
-                                           api_response["dat"]["bt"]["v"],
-                                           api_response["dat"]["bt"]["t"],
-                                           api_response["dat"]["bt"]["c"] != "0")
+        self._battery = self.BatteryStatus(api_response["dat"]["bt"]["p"],
+                                            api_response["dat"]["bt"]["nr"],
+                                            api_response["dat"]["bt"]["v"],
+                                            api_response["dat"]["bt"]["t"],
+                                            api_response["dat"]["bt"]["c"] != "0")
 
-        self.orientation = self._Orientation(api_response["dat"]["dmp"][2],
+        self._orientation = self.Orientation(api_response["dat"]["dmp"][2],
                                              api_response["dat"]["dmp"][0],
                                              api_response["dat"]["dmp"][1])
 
-        self.statistics = self._Statistics(api_response["dat"]["st"]["d"],
+        self._statistics = self.Statistics(api_response["dat"]["st"]["d"],
                                            api_response["dat"]["st"]["wt"],
                                            api_response["dat"]["st"]["b"])
 
-        self.lastState = self._lastStateDict[api_response["dat"]["ls"]]
-        self.lastError = self._lastErrorDict[api_response["dat"]["le"]]
-        self.updated = api_response["cfg"]["tm"] + " " + api_response["cfg"]["dt"]
+        self._state = self._lastStateDict[api_response["dat"]["ls"]]
+        self._error = self._lastErrorDict[api_response["dat"]["le"]]
+        self._updated = api_response["cfg"]["tm"] + " " + api_response["cfg"]["dt"]
 
     def __str__(self):
         return "landroid status\n" \
@@ -296,5 +386,5 @@ class MowerStatus(object):
                "State:      {state}\n" \
                "Error:      {error}\n" \
                "Battery:    {percent}%/{temp}C/{voltage}v" \
-               "".format(updated=self.updated, state=self.lastState, error=self.lastError,
-                         percent=self.battery.percent, temp=self.battery.temperature, voltage=self.battery.volts)
+               "".format(updated=self._updated, state=self._state, error=self._error,
+                         percent=self._battery.percent, temp=self._battery.temperature, voltage=self._battery.volts)
