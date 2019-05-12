@@ -1,0 +1,14 @@
+language: python
+dist: xenial
+python:
+  - "2.7"
+  - "3.6"
+  - "3.7"
+  - "3.8"
+# command to install dependencies
+install:
+  - pip install pytest pylint
+# command to run tests
+script:
+  - pytest
+  - pylint --errors-only landroidcc/
