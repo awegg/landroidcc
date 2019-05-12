@@ -3,7 +3,6 @@ from landroidcc import LandroidStatus
 
 def test_status_update_successful():
     # ARRANGE
-    status = LandroidStatus()
     input = '{"cfg":{"id":1,"lg":"it","tm":"08:57:38","dt":"28/04/2019",' \
             '"sc":{"m":1,"p":0,"d":[["00:00",0,0],["10:00",120,0],["10:00",120,0],["10:00",120,0],["10:00",120,1],' \
             '["10:00",120,0],["10:00",120,0]]},' \
@@ -13,7 +12,7 @@ def test_status_update_successful():
             '"lk":0,"act":1,"conn":"wifi"}}'
 
     # ACT
-    status._updatestatus(input)
+    status = LandroidStatus(input)
 
     # ASSERT
     assert status
