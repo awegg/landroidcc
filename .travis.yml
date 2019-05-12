@@ -4,11 +4,7 @@ python:
   - "2.7"
   - "3.6"
   - "3.7"
-  - "3.8"
-# command to install dependencies
-install:
-  - pip install pytest pylint
-# command to run tests
+  - "3.8-dev"
 script:
   - pytest
   - pylint --errors-only landroidcc/
