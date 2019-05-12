@@ -46,11 +46,11 @@ def main():
             print(status)
         if args.statusRaw:
             print("Raw status: ")
-            print(status.raw)
+            print(status._raw)
         if args.startMowing:
-            mower.start_mowing()
+            mower.start()
         elif args.pauseMowing:
-            mower.stop_mowing()
+            mower.pause()
         elif args.goHome:
             mower.go_home()
         elif args.watchPassive:
