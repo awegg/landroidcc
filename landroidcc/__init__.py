@@ -134,7 +134,7 @@ class Landroid(object):
         pkcs12 = base64.decodestring(self._api_certificate["pkcs12"].encode())
         p12 = OpenSSL.crypto.load_pkcs12(pkcs12)
         pem_filename = os.path.join(self._cachedir, "auth.pem")
-        with open(pem_filename, "w") as f_pem:
+        with open(pem_filename, "wb") as f_pem:
             f_pem.write(OpenSSL.crypto.dump_privatekey(OpenSSL.crypto.FILETYPE_PEM, p12.get_privatekey()))
             f_pem.write(OpenSSL.crypto.dump_certificate(OpenSSL.crypto.FILETYPE_PEM, p12.get_certificate()))
             ca = p12.get_ca_certificates()
