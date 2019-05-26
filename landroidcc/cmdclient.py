@@ -26,13 +26,13 @@ def main():
 
     args = parser.parse_args()
     if args.verbose:
-        log.setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
         logging.getLogger("urllib3").setLevel(logging.DEBUG)
     elif args.silent:
-        log.setLevel(logging.WARN)
+        logging.getLogger().setLevel(logging.WARN)
         logging.getLogger("urllib3").setLevel(logging.WARN)
     else:
-        log.setLevel(logging.INFO)
+        logging.getLogger().setLevel(logging.INFO)
         logging.getLogger("urllib3").setLevel(logging.INFO)
 
     if any([args.status, args.statusRaw, args.startMowing, args.pauseMowing, args.goHome,

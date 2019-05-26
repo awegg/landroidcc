@@ -54,7 +54,8 @@ status returned has the type: LandroidStatus
 
    from landroidcc import Landroid
 
-   landroid = Landroid("user", "pass")
+   landroid = Landroid()
+   landroid.connect("user", "pass")
    status = landroid.get_status()
    print("Battery: {}%".format(status.get_battery().percent))
    landroid.start()  # Start mowing

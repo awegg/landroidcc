@@ -122,7 +122,8 @@ class Landroid(object):
         # The callback for when a PUBLISH message is received from the server.
         def on_message(client, userdata, msg):
             log.debug("MQTT Msg Received: " + msg.topic + " " + str(msg.payload))
-            status = LandroidStatus(msg.payload)
+            payload = msg.payload.decode('utf-8') if isinstance(msg.payload, (bytes, bytearray)) else msg.payload
+            status = LandroidStatus(payload)
             self._status = status
             self._eventmessage.set()
             if self._statuscallback:
@@ -182,7 +183,8 @@ class Landroid(object):
         :return: The status of the mower.
         """
         if refresh:
-            self._apicall_mqtt("{}")
+            if not self._apicall_mqtt("{}"):
+                log.warning("Timeout while trying to get a new status")
         return self._status
 
     def _apicall_mqtt(self, content, blocking=True):
@@ -196,7 +198,8 @@ class Landroid(object):
         return result
 
     def _initcache(self):
-        cachefilename = os.path.join(self._cachedir, "cache.json")
+        cachedir = os.path.join(self._cachedir, self._username)
+        cachefilename = os.path.join(cachedir, "cache.json")
         if not os.path.isfile(cachefilename):
             return
         with open(cachefilename) as fptr:
