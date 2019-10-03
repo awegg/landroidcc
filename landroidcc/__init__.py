@@ -340,7 +340,7 @@ class LandroidStatus(object):
         :return: The error as text
         :rtype: str
         """
-        return self._state
+        return self._error
 
     def get_state(self):
         """
