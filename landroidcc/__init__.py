@@ -132,7 +132,10 @@ class Landroid(object):
         def on_log(client, userdata, level, buf):
             log.debug("MQTT Library Log: {}".format(buf))
 
-        pkcs12 = base64.decodestring(self._api_certificate["pkcs12"].encode())
+        try:
+            pkcs12 = base64.decodebytes(self._api_certificate["pkcs12"].encode())
+        except AttributeError:
+            pkcs12 = base64.decodestring(self._api_certificate["pkcs12"].encode())
         p12 = OpenSSL.crypto.load_pkcs12(pkcs12)
         pem_filename = os.path.join(self._cachedir, "auth.pem")
         with open(pem_filename, "wb") as f_pem:
