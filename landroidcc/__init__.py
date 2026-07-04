@@ -217,9 +217,16 @@ class Landroid(object):
         # Format: WX/USER/<user_id>/openhab/<product_uuid>
         # Note: 'openhab' is literal here, as seen in the Java MQTT_USERNAME
         client_id = f"WX/USER/{self._user_id}/openhab/{self._mower_uuid}"
-        
-        self._mqtt_client = mqtt.Client(client_id=client_id, transport="websockets", userdata=self)
-        
+
+        self._eventconnect.clear()
+
+        self._mqtt_client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+            client_id=client_id,
+            transport="websockets",
+            userdata=self,
+        )
+
         # 4. Set Clean Session to False (Mirroring Java .withCleanSession(false))
         self._mqtt_client.ws_set_options(path="/mqtt", headers=custom_headers)
         self._mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
@@ -239,8 +246,19 @@ class Landroid(object):
         if not self._eventconnect.wait(30):
             # If it times out, check the 'on_log' output in your terminal
             log.error("MQTT connection timed out. Check MQTT Library Logs above.")
-            
+            raise TimeoutError("MQTT handshake did not complete within 30 seconds")
+
         return self._status
+
+    def wait_until_ready(self, timeout=10):
+        """
+        Waits until the MQTT handshake has completed.
+
+        :param timeout: Maximum time in seconds to wait
+        :return: True if the handshake completed, False if it timed out
+        :rtype: bool
+        """
+        return self._eventconnect.wait(timeout)
 
     def set_statuscallback(self, func):
         """
