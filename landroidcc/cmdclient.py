@@ -75,7 +75,7 @@ def main():
             print(status)
         if args.statusRaw:
             print("Raw status: ")
-            print(status._raw)
+            print(status.get_raw())
         if args.startMowing:
             mower.start()
         elif args.pauseMowing:
@@ -88,14 +88,13 @@ def main():
                 print(status)
 
             mower.set_statuscallback(statusUpdate)
+            log.info("Watching for status updates. Hit ctrl-c to stop")
             while True:
                 time.sleep(60)
-                if args.status:
-                    status = mower.get_status()
+                status = mower.get_status()
                 if args.statusRaw:
                     print("Raw status: ")
-                    print(status._raw)
-                log.info("Watching for status updates. Hit ctrl-c to stop")
+                    print(status.get_raw())
 
 
 if __name__ == '__main__':
