@@ -135,10 +135,13 @@ class Landroid(object):
             else:
                 raise        
         product_id = self._api_product_items[0]["product_id"]
+        self._mower_product = None
         for product in self._api_products:
             if product["id"] == product_id:
                 self._mower_product = product
                 break
+        if self._mower_product is None:
+            self._mower_product = {"code": "unknown"}
 
         log.debug("UserID: %s, Serial number: %s, UUID: %s",
             self._user_id, self._sn, self._mower_uuid)
