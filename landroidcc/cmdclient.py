@@ -74,6 +74,9 @@ def main():
 
         if args.status or args.statusRaw:
             status = mower.get_status()
+            if status is None:
+                log.error("No status received from mower.")
+                return 1
         if args.status:
             print(mower)
             print(status)
@@ -96,6 +99,9 @@ def main():
             while True:
                 time.sleep(60)
                 status = mower.get_status()
+                if status is None:
+                    log.warning("No status received from mower.")
+                    continue
                 if args.statusRaw:
                     print("Raw status: ")
                     print(status.get_raw())
