@@ -33,6 +33,9 @@ class Landroid(object):
     _cache = {}
     _refreshToken = None
     _expiresAt = 0  # Unix timestamp
+    _password = None
+    _connected = False
+    _last_refresh_ok = True
     
     # Global Identity Endpoint (Consolidated from regional id.eu.worx.com)
     AUTH_URL = "https://id.worx.com/oauth/token"
@@ -66,6 +69,7 @@ class Landroid(object):
         :return: None
         """
         self._username = username
+        self._password = password
         self._cachedir = os.path.join(tempfile.gettempdir(), "landroidcc", self._username)
         self._initcache()
         
@@ -145,7 +149,55 @@ class Landroid(object):
 
         :return: None
         """
-        self._mqtt_client.disconnect()
+        self._teardown_mqtt()
+
+    def is_connected(self):
+        """
+        Returns whether the MQTT session to the cloud is currently active.
+
+        :rtype: bool
+        """
+        return bool(self._connected and self._mqtt_client is not None and self._mqtt_client.is_connected())
+
+    def last_refresh_ok(self):
+        """
+        Returns whether the most recent get_status(refresh=True) call received a fresh
+        update from the mower before its wait timed out (i.e. the returned status is
+        not simply the previous cached one).
+
+        :rtype: bool
+        """
+        return self._last_refresh_ok
+
+    def _teardown_mqtt(self):
+        if self._mqtt_client is not None:
+            try:
+                self._mqtt_client.loop_stop()
+            except Exception:
+                pass
+            try:
+                self._mqtt_client.disconnect()
+            except Exception:
+                pass
+            self._mqtt_client = None
+        self._connected = False
+
+    def reconnect(self):
+        """
+        Fully re-establishes the connection to the cloud: re-authenticates to obtain a
+        fresh access token and rebuilds the MQTT session from scratch.
+
+        A plain MQTT/socket reconnect is not enough after a long outage, because the
+        custom auth headers used for the MQTT handshake are built from an access token
+        that may have expired while disconnected (e.g. the mower/host was out of WiFi
+        range for a while). This redoes the full login instead.
+
+        :return: None
+        """
+        if not self._username or not self._password:
+            raise RuntimeError("reconnect() called before connect() has succeeded once")
+        self._teardown_mqtt()
+        self.connect(self._username, self._password)
 
     def start(self):
         """
@@ -184,9 +236,22 @@ class Landroid(object):
             if rc == 0:
                 client.subscribe(self._mqtt_topic_out)
                 log.info("Successfully connected to the cloud via WebSockets")
+                self._connected = True
                 self._eventconnect.set()
             else:
                 log.error(f"MQTT Connection failed with return code {rc}")
+                self._connected = False
+
+        def on_disconnect(client, userdata, rc):
+            self._connected = False
+            self._eventconnect.clear()
+            if rc == 0:
+                log.info("MQTT disconnected cleanly")
+            else:
+                log.warning(
+                    "MQTT disconnected unexpectedly (rc=%s); paho will keep retrying the "
+                    "socket, but call reconnect() if the outage may have outlasted the "
+                    "access token", rc)
 
         # The callback for when a PUBLISH message is received from the server.
         def on_message(client, userdata, msg):
@@ -238,6 +303,7 @@ class Landroid(object):
 
         self._mqtt_client.on_connect = on_connect
         self._mqtt_client.on_message = on_message
+        self._mqtt_client.on_disconnect = on_disconnect
         self._mqtt_client.on_log = on_log
 
         log.info(f"Connecting to {self._mqtt_endpoint} on port 443...")
@@ -295,6 +361,9 @@ class Landroid(object):
             if not self._apicall_mqtt("{}"):
                 log.warning("Timeout while trying to get a new status")
                 log.info("Status: %s", str(self._status))
+                self._last_refresh_ok = False
+            else:
+                self._last_refresh_ok = True
 
         return self._status
 
