@@ -61,7 +61,11 @@ def main():
             args.goHome, args.watchPassive
     ]):
         mower = Landroid()
-        mower.connect(args.username, args.password)
+        try:
+            mower.connect(args.username, args.password)
+        except TimeoutError:
+            log.error("MQTT handshake did not complete; aborting.")
+            return 1
 
         if not mower.wait_until_ready(10):
             log.error("MQTT handshake did not complete; aborting.")
