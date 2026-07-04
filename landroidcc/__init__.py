@@ -465,8 +465,7 @@ class Landroid(object):
     def _refresh_token(self):
         """Refreshes the session using the stored refresh_token"""
         if not self._refreshToken:
-            log.error("No refresh token available. Re-authenticating...")
-            return # Alternatively, trigger _api_authentificate
+            raise RuntimeError("No refresh token available; re-authentication is required")
 
         post_json = {
             "grant_type": "refresh_token",
