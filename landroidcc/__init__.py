@@ -72,32 +72,39 @@ class Landroid(object):
         # 1. Authenticate (Global id.worx.com)
         self._api_authentificate(username, password)
 
-        # 2. Skip users/me (avoids 405) and go straight to product-items.
-        # Ensure your _apicall_rest handles the ?status=1 query param.
+        # 2. Fetch the mower list from product-items.
         self._api_product_items = self._apicall_rest("product-items?status=1")
-        
+
         if not self._api_product_items:
             log.error("No mowers found for this account.")
             return
 
         log.debug("Product: %s", self._api_product_items)
 
-        try:
-            self._api_user = self._apicall_rest("users/me")
-        except requests.exceptions.HTTPError as e:
-            log.warning("Endpoint 'users/me' returned 404 '%s'. Falling back to Unknown.", str(e))
-
+        self._api_user = None
+        for endpoint in ("users/me", "api/v1/users/me"):
             try:
-                self._api_user = self._apicall_rest("api/v1/users/me")
+                self._api_user = self._apicall_rest(endpoint)
+                break
             except requests.exceptions.HTTPError as e:
-                log.warning("Endpoint 'users/me' returned 404 '%s'. Falling back to Unknown.", str(e))
-                self._api_user = "Unknown"
+                status = e.response.status_code if e.response is not None else "?"
+                log.warning("Endpoint '%s' returned %s. Trying fallback.", endpoint, status)
 
-
-        # 3. Extract the MQTT endpoint from the product item itself
+        # 3. Extract the MQTT endpoint and identifiers from the product item itself
         # In the 2026 API, this is the authoritative source for the broker URL
-        self._mqtt_endpoint = self._api_product_items[0].get("mqtt_endpoint")
-        
+        product_item = self._api_product_items[0]
+        self._mqtt_endpoint = product_item.get("mqtt_endpoint")
+        self._user_id = product_item.get("user_id")
+        self._mower_uuid = product_item.get("uuid")
+        self._sn = product_item.get("serial_number")
+        missing = [k for k, v in {
+            "mqtt_endpoint": self._mqtt_endpoint,
+            "user_id": self._user_id,
+            "uuid": self._mower_uuid,
+        }.items() if not v]
+        if missing:
+            raise ValueError(f"Product item missing required fields: {missing}")
+
         # 4. Map the topics
         self._mqtt_topic_out = self._api_product_items[0]["mqtt_topics"]["command_out"]
         self._mqtt_topic_in = self._api_product_items[0]["mqtt_topics"]["command_in"]
@@ -126,14 +133,7 @@ class Landroid(object):
                 self._mower_product = product
                 break
 
-        # print(json.dumps(self._api_product_items, indent=2))
-        # print(json.dumps(self._mower_product, indent=2))
-        # Store details
-        self._user_id = self._api_product_items[0].get("user_id")
-        self._sn = self._api_product_items[0].get("serial_number")
-        self._mower_uuid = self._api_product_items[0].get("uuid")
-        
-        log.debug("UserID: %s, Serial number: %s, UUID: %s", 
+        log.debug("UserID: %s, Serial number: %s, UUID: %s",
             self._user_id, self._sn, self._mower_uuid)
 
         self._writecache()
