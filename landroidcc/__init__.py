@@ -2,12 +2,11 @@ import json
 import logging
 import os
 import tempfile
-import uuid
-import base64
+import time
 from collections import namedtuple
 from threading import Event
+import ssl
 
-import OpenSSL
 import paho.mqtt.client as mqtt
 import requests
 
@@ -32,6 +31,23 @@ class Landroid(object):
     _mqtt_client = None
     _cachedir = None
     _cache = {}
+    _refreshToken = None
+    _expiresAt = 0  # Unix timestamp
+    _password = None
+    _connected = False
+    _last_refresh_ok = True
+    
+    # Global Identity Endpoint (Consolidated from regional id.eu.worx.com)
+    AUTH_URL = "https://id.worx.com/oauth/token"
+    API_BASE_URL = "https://api.worxlandroid.com/api/v2/"
+    
+    # This Client ID remains the standard for the 2026 Positec ecosystem
+    WORX_CLIENT_ID = "150da4d2-bb44-433b-9429-3773adc70a2a"
+    # Well-known Worx app secret, shared across official clients
+    WORX_CLIENT_SECRET = "nCH3A0WvMYn66vGorjSrnGZ2YtjQWDiCvjg7jNxK"
+    _user_id = None
+    _mower_uuid = None
+    _sn = None
 
     def __init__(self):
         """
@@ -46,40 +62,148 @@ class Landroid(object):
         """
         Connect to the cloud with the given credentials.
 
+        Updated connect logic for the 2026 Global API
+
         :param username: Username for the cloud login
         :param password: Password for the login
         :return: None
         """
         self._username = username
+        self._password = password
         self._cachedir = os.path.join(tempfile.gettempdir(), "landroidcc", self._username)
         self._initcache()
+        
+        # 1. Authenticate (Global id.worx.com)
         self._api_authentificate(username, password)
 
-        self._api_user = self._apicall_rest("users/me")
-        self._mqtt_endpoint = self._api_user["mqtt_endpoint"]
+        # 2. Fetch the mower list from product-items.
+        self._api_product_items = self._apicall_rest("product-items?status=1")
 
-        self._api_product_items = self._apicall_rest("product-items")
-        self._mqtt_topic_out = self._api_product_items[0]["mqtt_topics"]["command_out"]
-        self._mqtt_topic_in = self._api_product_items[0]["mqtt_topics"]["command_in"]
-        self._api_boards = self._apicall_rest("boards")
-        self._api_products = self._apicall_rest("products")
+        if not self._api_product_items:
+            log.error("No mowers found for this account.")
+            return
+
+        log.debug("Product: %s", self._api_product_items)
+
+        self._api_user = None
+        for endpoint in ("users/me", "api/v1/users/me"):
+            try:
+                self._api_user = self._apicall_rest(endpoint)
+                break
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else "?"
+                log.warning("Endpoint '%s' returned %s. Trying fallback.", endpoint, status)
+
+        # 3. Extract the MQTT endpoint and identifiers from the product item itself
+        # In the 2026 API, this is the authoritative source for the broker URL
+        product_item = self._api_product_items[0]
+        self._mqtt_endpoint = product_item.get("mqtt_endpoint")
+        self._user_id = product_item.get("user_id")
+        self._mower_uuid = product_item.get("uuid")
+        self._sn = product_item.get("serial_number")
+        mqtt_topics = product_item.get("mqtt_topics") or {}
+        missing = [k for k, v in {
+            "mqtt_endpoint": self._mqtt_endpoint,
+            "user_id": self._user_id,
+            "uuid": self._mower_uuid,
+            "mqtt_topics.command_out": mqtt_topics.get("command_out"),
+            "mqtt_topics.command_in": mqtt_topics.get("command_in"),
+        }.items() if not v]
+        if missing:
+            raise ValueError(f"Product item missing required fields: {missing}")
+
+        # 4. Map the topics
+        self._mqtt_topic_out = mqtt_topics["command_out"]
+        self._mqtt_topic_in = mqtt_topics["command_in"]
+        
+        # 5. Continue with metadata, handling 404s for potentially deprecated endpoints
+        try:
+            self._api_boards = self._apicall_rest("boards")
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                log.warning("Endpoint 'boards' returned 404. Falling back to empty list.")
+                self._api_boards = []
+            else:
+                raise
+
+        try:
+            self._api_products = self._apicall_rest("products")
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                log.warning("Endpoint 'products' returned 404. Falling back to empty list.")
+                self._api_products = []
+            else:
+                raise        
         product_id = self._api_product_items[0]["product_id"]
+        self._mower_product = None
         for product in self._api_products:
             if product["id"] == product_id:
                 self._mower_product = product
                 break
+        if self._mower_product is None:
+            self._mower_product = {"code": "unknown"}
 
-        self._api_certificate = self._apicall_rest("users/certificate")
+        log.debug("UserID: %s, Serial number: %s, UUID: %s",
+            self._user_id, self._sn, self._mower_uuid)
+
         self._writecache()
         self._connectmqtt()
-
+       
     def disconnect(self):
         """
         Disconnects from the cloud
 
         :return: None
         """
-        self._mqtt_client.disconnect()
+        self._teardown_mqtt()
+
+    def is_connected(self):
+        """
+        Returns whether the MQTT session to the cloud is currently active.
+
+        :rtype: bool
+        """
+        return bool(self._connected and self._mqtt_client is not None and self._mqtt_client.is_connected())
+
+    def last_refresh_ok(self):
+        """
+        Returns whether the most recent get_status(refresh=True) call received a fresh
+        update from the mower before its wait timed out (i.e. the returned status is
+        not simply the previous cached one).
+
+        :rtype: bool
+        """
+        return self._last_refresh_ok
+
+    def _teardown_mqtt(self):
+        if self._mqtt_client is not None:
+            try:
+                self._mqtt_client.loop_stop()
+            except Exception:
+                pass
+            try:
+                self._mqtt_client.disconnect()
+            except Exception:
+                pass
+            self._mqtt_client = None
+        self._connected = False
+
+    def reconnect(self):
+        """
+        Fully re-establishes the connection to the cloud: re-authenticates to obtain a
+        fresh access token and rebuilds the MQTT session from scratch.
+
+        A plain MQTT/socket reconnect is not enough after a long outage, because the
+        custom auth headers used for the MQTT handshake are built from an access token
+        that may have expired while disconnected (e.g. the mower/host was out of WiFi
+        range for a while). This redoes the full login instead.
+
+        :return: None
+        """
+        if not self._username or not self._password:
+            raise RuntimeError("reconnect() called before connect() has succeeded once")
+        self._teardown_mqtt()
+        self.connect(self._username, self._password)
 
     def start(self):
         """
@@ -114,10 +238,26 @@ class Landroid(object):
     def _connectmqtt(self):
         # Callback for connect
         def on_connect(client, userdata, flags, rc):
-            log.debug("MQTT onnected with result code " + str(rc))
-            client.subscribe(self._mqtt_topic_out)
-            log.info("Successfully connected to the cloud")
-            self._eventconnect.set()
+            log.debug("MQTT Connected with result code " + str(rc))
+            if rc == 0:
+                client.subscribe(self._mqtt_topic_out)
+                log.info("Successfully connected to the cloud via WebSockets")
+                self._connected = True
+                self._eventconnect.set()
+            else:
+                log.error(f"MQTT Connection failed with return code {rc}")
+                self._connected = False
+
+        def on_disconnect(client, userdata, rc):
+            self._connected = False
+            self._eventconnect.clear()
+            if rc == 0:
+                log.info("MQTT disconnected cleanly")
+            else:
+                log.warning(
+                    "MQTT disconnected unexpectedly (rc=%s); paho will keep retrying the "
+                    "socket, but call reconnect() if the outage may have outlasted the "
+                    "access token", rc)
 
         # The callback for when a PUBLISH message is received from the server.
         def on_message(client, userdata, msg):
@@ -132,29 +272,68 @@ class Landroid(object):
         def on_log(client, userdata, level, buf):
             log.debug("MQTT Library Log: {}".format(buf))
 
-        try:
-            pkcs12 = base64.decodebytes(self._api_certificate["pkcs12"].encode())
-        except AttributeError:
-            pkcs12 = base64.decodestring(self._api_certificate["pkcs12"].encode())
-        p12 = OpenSSL.crypto.load_pkcs12(pkcs12)
-        pem_filename = os.path.join(self._cachedir, "auth.pem")
-        with open(pem_filename, "wb") as f_pem:
-            f_pem.write(OpenSSL.crypto.dump_privatekey(OpenSSL.crypto.FILETYPE_PEM, p12.get_privatekey()))
-            f_pem.write(OpenSSL.crypto.dump_certificate(OpenSSL.crypto.FILETYPE_PEM, p12.get_certificate()))
-            ca = p12.get_ca_certificates()
-            if ca is not None:
-                for cert in ca:
-                    f_pem.write(OpenSSL.crypto.dump_certificate(OpenSSL.crypto.FILETYPE_PEM, cert))
+        # --- 2026 JWT AUTH LOGIC ---
+        # 1. Precise token splitting (Ensure no leading/trailing whitespace)
+        normalized_token = self._accessToken.replace('_', '/').replace('-', '+')
+        tok = normalized_token.split('.')        
+        jwt_payload = f"{tok[0]}.{tok[1]}"
+        signature = tok[2]
 
-        self._mqtt_client = mqtt.Client(client_id="android-" + str(uuid.uuid4()), userdata=self)
-        self._mqtt_client.tls_set(certfile=pem_filename, keyfile=pem_filename)
+        # 2. Strict Header Keys (Check case sensitivity)
+        custom_headers = {
+            "x-amz-customauthorizer-name": "com-worxlandroid-customer",
+            "x-amz-customauthorizer-signature": signature,
+            "jwt": jwt_payload
+        }
+
+        # 3. Mirror the WorxLandroid openHAB Java Client ID exactly
+        # Format: WX/USER/<user_id>/openhab/<product_uuid>
+        # Note: 'openhab' is literal here, as seen in the Java MQTT_USERNAME
+        client_id = f"WX/USER/{self._user_id}/openhab/{self._mower_uuid}"
+
+        self._eventconnect.clear()
+
+        self._mqtt_client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION1,
+            client_id=client_id,
+            transport="websockets",
+            userdata=self,
+        )
+
+        # 4. Set Clean Session to False (Mirroring Java .withCleanSession(false))
+        self._mqtt_client.ws_set_options(path="/mqtt", headers=custom_headers)
+        self._mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2)
+        
+        # 5. Username is required for the authorizer to trigger
+        self._mqtt_client.username_pw_set("openhab")
+
         self._mqtt_client.on_connect = on_connect
         self._mqtt_client.on_message = on_message
+        self._mqtt_client.on_disconnect = on_disconnect
         self._mqtt_client.on_log = on_log
-        self._mqtt_client.connect(self._mqtt_endpoint, 8883, keepalive=300)
+
+        log.info(f"Connecting to {self._mqtt_endpoint} on port 443...")
+        self._mqtt_client.connect(self._mqtt_endpoint, 443, keepalive=300)
+        
         self._mqtt_client.loop_start()
-        self._eventconnect.wait(30)
+        
+        if not self._eventconnect.wait(30):
+            # If it times out, check the 'on_log' output in your terminal
+            log.error("MQTT connection timed out. Check MQTT Library Logs above.")
+            self._teardown_mqtt()
+            raise TimeoutError("MQTT handshake did not complete within 30 seconds")
+
         return self._status
+
+    def wait_until_ready(self, timeout=10):
+        """
+        Waits until the MQTT handshake has completed.
+
+        :param timeout: Maximum time in seconds to wait
+        :return: True if the handshake completed, False if it timed out
+        :rtype: bool
+        """
+        return self._eventconnect.wait(timeout)
 
     def set_statuscallback(self, func):
         """
@@ -188,6 +367,11 @@ class Landroid(object):
         if refresh:
             if not self._apicall_mqtt("{}"):
                 log.warning("Timeout while trying to get a new status")
+                log.info("Status: %s", str(self._status))
+                self._last_refresh_ok = False
+            else:
+                self._last_refresh_ok = True
+
         return self._status
 
     def _apicall_mqtt(self, content, blocking=True):
@@ -224,14 +408,31 @@ class Landroid(object):
             log.debug("API Call form Cache: '{}': {}".format(url, self._cache[url]))
             return self._cache[url]
 
+        if set_headers and self._expiresAt and time.time() >= self._expiresAt:
+            self._refresh_token()
+
         headers = None
         if set_headers:
-            headers = {"Content-Type": "application/json",
-                       "Authorization": self._accessTokenType + " " + self._accessToken}
-        if postdata:
-            response_plain = requests.post('https://api.worxlandroid.com/api/v2/' + url, data=postdata, headers=headers)
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"{self._accessTokenType} {self._accessToken}",
+                # 2026 Critical Addition: Identification
+                "User-Agent": "Landroid/3.33 (com.worxlandroid.customer; build:1234; iOS 17.4.1) Alamofire/5.9.1",
+                "X-App-Id": "com.worxlandroid.customer"
+            }
+        # Apply the Java change for status-inclusive calls if requested
+        if url.startswith("api"):
+            base = "https://api.worxlandroid.com/"
         else:
-            response_plain = requests.get('https://api.worxlandroid.com/api/v2/' + url, headers=headers)
+            base = self.API_BASE_URL # This is your .../v2/
+            
+        target_url = base + url
+
+        if postdata:
+            response_plain = requests.post(target_url, json=postdata, headers=headers, timeout=30)
+        else:
+            response_plain = requests.get(target_url, headers=headers, timeout=30)
+
         response_plain.raise_for_status()
         response = response_plain.json()
         log.debug("API Call '{}': {}".format(url, response))
@@ -243,15 +444,46 @@ class Landroid(object):
             "username": username,
             "password": password,
             "grant_type": "password",
-            "client_id": 1,
+            "client_id": self.WORX_CLIENT_ID, # Updated
             "type": "app",
-            "client_secret": "nCH3A0WvMYn66vGorjSrnGZ2YtjQWDiCvjg7jNxK",
+            "client_secret": self.WORX_CLIENT_SECRET,
             "scope": "*"
         }
-        response = self._apicall_rest('oauth/token', postdata=post_json, set_headers=False)
+        # Direct call to the new AUTH_URL instead of the v2 API path
+        response_plain = requests.post(self.AUTH_URL, json=post_json, timeout=30)
+        response_plain.raise_for_status()
+        response = response_plain.json()
+
         self._accessToken = response["access_token"]
+        self._refreshToken = response.get("refresh_token")
         self._accessTokenType = response["token_type"]
-        log.info("Successfully logged in")
+        # Buffer the expiration by 60 seconds to avoid race conditions
+        self._expiresAt = time.time() + int(response.get("expires_in", 3600)) - 60
+        
+        log.info("Successfully logged in and retrieved refresh token, authenticated via global identity server.")        
+
+    def _refresh_token(self):
+        """Refreshes the session using the stored refresh_token"""
+        if not self._refreshToken:
+            raise RuntimeError("No refresh token available; re-authentication is required")
+
+        post_json = {
+            "grant_type": "refresh_token",
+            "refresh_token": self._refreshToken,
+            "client_id": self.WORX_CLIENT_ID,
+            "client_secret": self.WORX_CLIENT_SECRET,
+            "scope": "*"
+        }
+
+        log.debug("Attempting to refresh access token")
+        response_plain = requests.post(self.AUTH_URL, json=post_json, timeout=30)
+        response_plain.raise_for_status()
+        response = response_plain.json()
+
+        self._accessToken = response["access_token"]
+        self._refreshToken = response.get("refresh_token", self._refreshToken)
+        self._expiresAt = time.time() + int(response.get("expires_in", 3600)) - 60
+        log.info("Access token refreshed successfully")
 
     def __str__(self):
         if not self._api_user:
@@ -262,7 +494,7 @@ class Landroid(object):
                "Serial: {serial}\n" \
                "Type:   {code}\n".format(name=self._api_product_items[0]["name"],
                                          serial=self._api_product_items[0]["serial_number"],
-                                         code=self._mower_product["code"])
+                                         code=(self._mower_product or {}).get("code", "unknown"))
 
 
 class LandroidStatus(object):

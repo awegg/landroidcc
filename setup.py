@@ -17,14 +17,13 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="",
     install_requires=[
-       'pyOpenSSL', 'requests', 'paho-mqtt'
+       'requests', 'paho-mqtt>=2.0'
     ],
     entry_points={
         'console_scripts': ['landroidcc=landroidcc.cmdclient:main'],
     },
     packages=setuptools.find_packages(),
     classifiers=[
-        "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",

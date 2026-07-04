@@ -1,0 +1,6 @@
+-r requirements.txt
+-e .
+pylint==2.3.1
+pytest==9.0.3
+sphinx==1.8.5
+sphinx-rtd-theme==0.4.3
