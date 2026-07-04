@@ -17,7 +17,7 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="",
     install_requires=[
-       'requests', 'paho-mqtt'
+       'requests', 'paho-mqtt>=2.0'
     ],
     entry_points={
         'console_scripts': ['landroidcc=landroidcc.cmdclient:main'],
