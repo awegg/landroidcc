@@ -274,6 +274,8 @@ class Landroid(object):
         if refresh:
             if not self._apicall_mqtt("{}"):
                 log.warning("Timeout while trying to get a new status")
+                log.info("Status: %s", str(self._status))
+
         return self._status
 
     def _apicall_mqtt(self, content, blocking=True):
