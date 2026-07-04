@@ -101,17 +101,20 @@ class Landroid(object):
         self._user_id = product_item.get("user_id")
         self._mower_uuid = product_item.get("uuid")
         self._sn = product_item.get("serial_number")
+        mqtt_topics = product_item.get("mqtt_topics") or {}
         missing = [k for k, v in {
             "mqtt_endpoint": self._mqtt_endpoint,
             "user_id": self._user_id,
             "uuid": self._mower_uuid,
+            "mqtt_topics.command_out": mqtt_topics.get("command_out"),
+            "mqtt_topics.command_in": mqtt_topics.get("command_in"),
         }.items() if not v]
         if missing:
             raise ValueError(f"Product item missing required fields: {missing}")
 
         # 4. Map the topics
-        self._mqtt_topic_out = self._api_product_items[0]["mqtt_topics"]["command_out"]
-        self._mqtt_topic_in = self._api_product_items[0]["mqtt_topics"]["command_in"]
+        self._mqtt_topic_out = mqtt_topics["command_out"]
+        self._mqtt_topic_in = mqtt_topics["command_in"]
         
         # 5. Continue with metadata, handling 404s for potentially deprecated endpoints
         try:
