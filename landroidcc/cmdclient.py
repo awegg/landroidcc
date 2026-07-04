@@ -31,7 +31,7 @@ def main():
                         help="Show actual status one time")
     parser.add_argument('--statusRaw',
                         action="store_true",
-                        help="Show actual status one time")
+                        help="Show the raw status message as received from the mower")
     parser.add_argument('--startMowing',
                         action="store_true",
                         help="Send 'start' command to mower")
