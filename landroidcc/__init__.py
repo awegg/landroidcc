@@ -328,13 +328,11 @@ class Landroid(object):
             base = self.API_BASE_URL # This is your .../v2/
             
         target_url = base + url
-        if url == "product-items":
-            target_url += "?status=1"
 
         if postdata:
-            response_plain = requests.post(target_url, json=postdata, headers=headers)
+            response_plain = requests.post(target_url, json=postdata, headers=headers, timeout=30)
         else:
-            response_plain = requests.get(target_url, headers=headers)        
+            response_plain = requests.get(target_url, headers=headers, timeout=30)
 
         response_plain.raise_for_status()
         response = response_plain.json()
