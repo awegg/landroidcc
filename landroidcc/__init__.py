@@ -39,7 +39,9 @@ class Landroid(object):
     API_BASE_URL = "https://api.worxlandroid.com/api/v2/"
     
     # This Client ID remains the standard for the 2026 Positec ecosystem
-    WORX_CLIENT_ID = "150da4d2-bb44-433b-9429-3773adc70a2a" 
+    WORX_CLIENT_ID = "150da4d2-bb44-433b-9429-3773adc70a2a"
+    # Well-known Worx app secret, shared across official clients
+    WORX_CLIENT_SECRET = "nCH3A0WvMYn66vGorjSrnGZ2YtjQWDiCvjg7jNxK"
     _user_id = None
     _mower_uuid = None
     _sn = None
@@ -330,6 +332,9 @@ class Landroid(object):
             log.debug("API Call form Cache: '{}': {}".format(url, self._cache[url]))
             return self._cache[url]
 
+        if set_headers and self._expiresAt and time.time() >= self._expiresAt:
+            self._refresh_token()
+
         headers = None
         if set_headers:
             headers = {
@@ -365,11 +370,11 @@ class Landroid(object):
             "grant_type": "password",
             "client_id": self.WORX_CLIENT_ID, # Updated
             "type": "app",
-            "client_secret": "nCH3A0WvMYn66vGorjSrnGZ2YtjQWDiCvjg7jNxK",
+            "client_secret": self.WORX_CLIENT_SECRET,
             "scope": "*"
         }
         # Direct call to the new AUTH_URL instead of the v2 API path
-        response_plain = requests.post(self.AUTH_URL, json=post_json)
+        response_plain = requests.post(self.AUTH_URL, json=post_json, timeout=30)
         response_plain.raise_for_status()
         response = response_plain.json()
 
@@ -391,12 +396,12 @@ class Landroid(object):
             "grant_type": "refresh_token",
             "refresh_token": self._refreshToken,
             "client_id": self.WORX_CLIENT_ID,
-            "client_secret": "nCH3A0WvMYn66vGorjSrnGZ2YtjQWDiCvjg7jNxK",
+            "client_secret": self.WORX_CLIENT_SECRET,
             "scope": "*"
         }
-        
+
         log.debug("Attempting to refresh access token")
-        response_plain = requests.post(self.AUTH_URL, json=post_json)
+        response_plain = requests.post(self.AUTH_URL, json=post_json, timeout=30)
         response_plain.raise_for_status()
         response = response_plain.json()
 
