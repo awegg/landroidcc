@@ -494,7 +494,7 @@ class Landroid(object):
                "Serial: {serial}\n" \
                "Type:   {code}\n".format(name=self._api_product_items[0]["name"],
                                          serial=self._api_product_items[0]["serial_number"],
-                                         code=self._mower_product["code"])
+                                         code=(self._mower_product or {}).get("code", "unknown"))
 
 
 class LandroidStatus(object):
