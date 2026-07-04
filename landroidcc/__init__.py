@@ -342,21 +342,6 @@ class Landroid(object):
         self._cache[url] = response
         return response
 
-    def _api_authentificate_orig(self, username, password):
-        post_json = {
-            "username": username,
-            "password": password,
-            "grant_type": "password",
-            "client_id": 1,
-            "type": "app",
-            "client_secret": "nCH3A0WvMYn66vGorjSrnGZ2YtjQWDiCvjg7jNxK",
-            "scope": "*"
-        }
-        response = self._apicall_rest('oauth/token', postdata=post_json, set_headers=False)
-        self._accessToken = response["access_token"]
-        self._accessTokenType = response["token_type"]
-        log.info("Successfully logged in")
-
     def _api_authentificate(self, username, password):
         post_json = {
             "username": username,
