@@ -63,10 +63,10 @@ def main():
         mower = Landroid()
         mower.connect(args.username, args.password)
 
-        if mower._eventconnect.wait(10):
-            log.info("Ready for commands.")
-        else:
-            log.warning("Connected but handshake pending.")
+        if not mower.wait_until_ready(10):
+            log.error("MQTT handshake did not complete; aborting.")
+            return 1
+        log.info("Ready for commands.")
 
         if args.status or args.statusRaw:
             status = mower.get_status()
