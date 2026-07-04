@@ -320,6 +320,7 @@ class Landroid(object):
         if not self._eventconnect.wait(30):
             # If it times out, check the 'on_log' output in your terminal
             log.error("MQTT connection timed out. Check MQTT Library Logs above.")
+            self._teardown_mqtt()
             raise TimeoutError("MQTT handshake did not complete within 30 seconds")
 
         return self._status
